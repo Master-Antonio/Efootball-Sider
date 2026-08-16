@@ -1,0 +1,50 @@
+name: 🔬 Reverse Engineering & Research Finding
+description: Submit new game memory offsets, AOB signatures, or database structure discoveries.
+title: "[RESEARCH]: "
+labels: ["research", "reverse-engineering"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for contributing to eFootball reverse-engineering research! Please provide rigorous, reproducible findings.
+  - type: input
+    id: game_version
+    attributes:
+      label: eFootball Build / Patch Version
+      placeholder: e.g. eFootball v6.1.0 Steam x64 (build 15234567)
+    validations:
+      required: true
+  - type: dropdown
+    id: finding_type
+    attributes:
+      label: Research Area
+      options:
+        - "Unreal Engine 4 Subsystem (Camera, ViewInfo, UObject)"
+        - "Fox Engine Database Table (pesdb, WESYS, XorShift128)"
+        - "IoStore Container (~mods, Zen Triplet, retoc)"
+        - "File I/O & LiveCPK Redirection"
+    validations:
+      required: true
+  - type: textarea
+    id: offset_signature
+    attributes:
+      label: Offset, RVA, or AOB Signature
+      placeholder: e.g. RVA 0x17E3597: F3 0F 10 B6 5C 10 00 00 ...
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: technical_evidence
+    attributes:
+      label: Technical Evidence & Disassembly Context
+      description: Provide disassembly snippets (IDA/Ghidra/x64dbg), telemetry marks (F9), or hex dumps (F10).
+      render: markdown
+    validations:
+      required: true
+  - type: textarea
+    id: reproducibility
+    attributes:
+      label: How to Reproduce / Verify
+      placeholder: Describe the in-game trigger or test steps needed to observe this behavior.
+    validations:
+      required: true

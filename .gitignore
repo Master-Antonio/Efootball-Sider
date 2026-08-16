@@ -1,0 +1,74 @@
+# ==============================================================================
+# eFootball Sider Studio & Core Engine - .gitignore
+# ==============================================================================
+
+# --- Rust & Cargo Build Artifacts ---
+target/
+**/target/
+*.pdb
+*.lib
+*.exp
+*.ilk
+*.obj
+*.dll
+*.exe
+
+# --- Python Environments & Caches ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+.venv/
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# --- Sider Studio Workspaces & Local Artifacts ---
+.workspace/
+artifacts/
+temp/
+tmp/
+scratch/
+.system_generated/
+*.log
+*.tmp
+*.bak
+*.raw_backup
+
+# --- Game Data, Dumps & Mods (Keep Source Code Clean) ---
+content/
+live_assets/
+*.dmp
+*.stackdump
+*.cpk.bak
+*.cpk.tmp
+*.ucas.bak
+*.utoc.bak
+camera_pattern_result.txt
+camera_sentinel.log
+sider_rust.log
+sider_gui.log
+
+# --- IDEs, Editors & OS Metadata ---
+.idea/
+.vscode/
+*.code-workspace
+*.swp
+*.swo
+*~
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+[Dd]esktop.ini
+.DS_Store
+._*
+copilot

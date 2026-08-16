@@ -1,0 +1,46 @@
+name: 🐛 Bug Report
+description: Report an issue, crash, or unexpected behavior in Mod Studio or runtime.
+title: "[BUG]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue! Please provide detailed context to help diagnose and resolve the bug.
+  - type: input
+    id: os_version
+    attributes:
+      label: Operating System & Environment
+      placeholder: e.g. Windows 11 Pro 23H2 x64, Steam eFootball build 12345678
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected Component
+      options:
+        - "Studio Desktop GUI (PySide6)"
+        - "Native DXGI Proxy (dxgi.dll)"
+        - "Camera Detour / OSD HUD / Plan B Scanner"
+        - "Database Extraction / Repack (WESYS / pesdb)"
+        - "Mod Manager / IoStore Zen Triplet (~mods)"
+        - "LiveCPK Virtual File System"
+        - "CI / Build Scripts"
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the Bug
+      description: A clear and concise description of what happened.
+      placeholder: Steps to reproduce the behavior...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log Output & Telemetry
+      description: Paste relevant sections of `sider_rust.log`, Python console output, or crash callstacks.
+      render: shell
+    validations:
+      required: false

@@ -1,0 +1,44 @@
+name: 💡 Feature Request
+description: Suggest an enhancement or new capability for Mod Studio or runtime.
+title: "[FEATURE]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for suggesting improvements to eFootball Mod Studio!
+  - type: dropdown
+    id: category
+    attributes:
+      label: Feature Category
+      options:
+        - "Studio GUI / UX"
+        - "Database & Squad Editing"
+        - "Mod Packaging & IoStore"
+        - "Camera Controls & In-Game Overlay"
+        - "Server Scaffolding (Kit/Stadium/Ball)"
+        - "Automation & Tooling"
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: Is your feature request related to a problem or workflow limitation?
+      placeholder: I'm always frustrated when...
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: Describe what you would like to happen and how it fits into Sider's architecture.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Describe any alternative solutions or workarounds you've evaluated.
+    validations:
+      required: false
