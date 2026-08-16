@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "efootball-sider-studio"
+version = "0.1.0"
+description = "Native Windows modding studio and runtime core for eFootball"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Toriga Modding Team" }]
+dependencies = [
+    "Pillow>=9.0.0",
+    "PySide6>=6.8.0",
+    "QtAwesome>=1.4.0",
+    "cricodecs>=1.2.0",
+    "psutil>=5.9.0",
+]
+
+[project.scripts]
+efootball-sider = "ui.app:main"
+
+[project.optional-dependencies]
+dev = ["ruff>=0.9.0"]
+
+[tool.setuptools.packages.find]
+include = ["ui*"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]

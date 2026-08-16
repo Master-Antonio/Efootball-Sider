@@ -1,0 +1,64 @@
+name: CI Build & Automated Test Suite
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build_and_test:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Rust Toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install Python Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install ruff
+
+    - name: Lint Modular Python Application
+      run: |
+        ruff check ui efootball_sider_gui.py scripts/build_release.py tests/test_ui_smoke.py
+        ruff format --check ui efootball_sider_gui.py scripts/build_release.py tests/test_ui_smoke.py
+
+    - name: Run Rust Automated Unit Tests
+      run: |
+        cd rust_sider
+        cargo test
+        cd ..
+
+    - name: Build Native Rust Core in Release Mode
+      working-directory: rust_sider
+      run: cargo build --release
+
+    - name: Run Python Automated Test Suite
+      env:
+        QT_QPA_PLATFORM: offscreen
+      run: |
+        python -m unittest discover -s tests
+
+    - name: Render UI Smoke Screenshot
+      env:
+        QT_QPA_PLATFORM: offscreen
+      run: |
+        python -m ui --screenshot .workspace/ui/ci-smoke.png --page overview --width 1280 --height 800
+
+    - name: Build Deterministic Release Archive
+      run: python scripts/build_release.py
+
+    - name: Upload Release Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: eFootball_Sider_Release
+        path: dist/eFootball_Sider_Studio.zip
