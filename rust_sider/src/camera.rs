@@ -22,7 +22,9 @@ pub static FREECAM_OFFSET_Y: AtomicU32 = AtomicU32::new(0);
 pub static FREECAM_OFFSET_Z: AtomicU32 = AtomicU32::new(0);
 
 pub static CAMERA_TARGETS_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub static LAST_CAMERA_HASH: AtomicU32 = AtomicU32::new(0);
+pub static DETOUR_CALL_COUNT: AtomicUsize = AtomicUsize::new(0);
+static NULL_PTR_LOGGED: AtomicBool = AtomicBool::new(false);
+static SANITY_WARN_LOGGED: AtomicBool = AtomicBool::new(false);
 
 pub static CAMERA_STATE: RwLock<CameraConfig> = RwLock::new(CameraConfig {
     enabled: true,
@@ -55,23 +57,6 @@ impl Default for CameraConfig {
             freecam_speed: 2.5,
         }
     }
-}
-
-/// Compute a 32-bit hash combining the camera configuration floats using golden ratio / mixing constants
-#[inline]
-pub fn compute_camera_hash(cfg: &CameraConfig) -> u32 {
-    compute_camera_values_hash(cfg.zoom, cfg.height, cfg.angle, cfg.fov)
-}
-
-/// Hash helper combining individual float values and freecam state
-#[inline]
-pub fn compute_camera_values_hash(zoom: f32, height: f32, angle: f32, fov: f32) -> u32 {
-    let mut h = 0x811C9DC5u32;
-    h = (h ^ zoom.to_bits()).wrapping_mul(0x9E3779B9);
-    h = (h ^ height.to_bits()).wrapping_mul(0x85EBCA6B);
-    h = (h ^ angle.to_bits()).wrapping_mul(0xC2B2AE3D);
-    h = (h ^ fov.to_bits()).wrapping_mul(0x27D4EB2D);
-    h
 }
 
 /// Helper to get current freecam position offsets as f32 values
@@ -111,9 +96,6 @@ pub fn adjust_freecam(dx: f32, dy: f32, dz: f32) {
     update_atomic(&FREECAM_OFFSET_X, dx);
     update_atomic(&FREECAM_OFFSET_Y, dy);
     update_atomic(&FREECAM_OFFSET_Z, dz);
-
-    // Invalidate hash so changes take effect immediately in the detour tick
-    LAST_CAMERA_HASH.store(0, Ordering::Relaxed);
 }
 
 /// Resets freecam offsets back to zero
@@ -121,7 +103,6 @@ pub fn reset_freecam() {
     FREECAM_OFFSET_X.store(0f32.to_bits(), Ordering::Relaxed);
     FREECAM_OFFSET_Y.store(0f32.to_bits(), Ordering::Relaxed);
     FREECAM_OFFSET_Z.store(0f32.to_bits(), Ordering::Relaxed);
-    LAST_CAMERA_HASH.store(0, Ordering::Relaxed);
 }
 
 /// Toggles freecam mode; resets offsets when disabled
@@ -194,7 +175,6 @@ pub fn load_camera_config_from_ini(ini_path: &Path) {
 
         if let Ok(mut current) = CAMERA_STATE.write() {
             *current = cfg;
-            LAST_CAMERA_HASH.store(0, Ordering::Relaxed);
         }
     }
 }
@@ -203,7 +183,6 @@ pub fn adjust_zoom(delta: f32) {
     if let Ok(mut cfg) = CAMERA_STATE.write() {
         cfg.zoom = (cfg.zoom + delta).clamp(0.1, 5.0);
         cfg.fov = (cfg.fov + delta * 25.0).clamp(15.0, 120.0);
-        LAST_CAMERA_HASH.store(0, Ordering::Relaxed);
         crate::log_msg(&format!(">>> Live Zoom Adjusted: {:.2} (FOV: {:.1} deg)", cfg.zoom, cfg.fov));
     }
 }
@@ -211,7 +190,6 @@ pub fn adjust_zoom(delta: f32) {
 pub fn adjust_height(delta: f32) {
     if let Ok(mut cfg) = CAMERA_STATE.write() {
         cfg.height = (cfg.height + delta).clamp(0.1, 5.0);
-        LAST_CAMERA_HASH.store(0, Ordering::Relaxed);
         crate::log_msg(&format!(">>> Live Height Adjusted: {:.2}", cfg.height));
     }
 }
@@ -219,7 +197,6 @@ pub fn adjust_height(delta: f32) {
 pub fn adjust_angle(delta: f32) {
     if let Ok(mut cfg) = CAMERA_STATE.write() {
         cfg.angle = (cfg.angle + delta).clamp(-1.0, 1.0);
-        LAST_CAMERA_HASH.store(0, Ordering::Relaxed);
         crate::log_msg(&format!(">>> Live Angle Adjusted: {:.2}", cfg.angle));
     }
 }
@@ -228,10 +205,14 @@ pub fn adjust_angle(delta: f32) {
 #[no_mangle]
 pub unsafe extern "C" fn sider_camera_tick_detour(pes_camera_component_ptr: usize) {
     if pes_camera_component_ptr == 0 {
+        if !NULL_PTR_LOGGED.swap(true, Ordering::Relaxed) {
+            crate::log_msg("[CAMERA DETOUR] Warning: Received null (0) camera component pointer.");
+        }
         return;
     }
 
     CAMERA_TARGETS_COUNT.store(1, Ordering::Relaxed);
+    let calls = DETOUR_CALL_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
 
     if let Ok(cfg) = CAMERA_STATE.read() {
         if !cfg.enabled {
@@ -250,22 +231,80 @@ pub unsafe extern "C" fn sider_camera_tick_detour(pes_camera_component_ptr: usiz
         let target_angle = cfg.angle + off_z;
         let target_fov = cfg.fov;
 
-        let current_hash = compute_camera_values_hash(target_zoom, target_height, target_angle, target_fov);
-        let last_hash = LAST_CAMERA_HASH.load(Ordering::Relaxed);
+        let zoom_ptr = (pes_camera_component_ptr + 0x105C) as *mut f32;
+        let height_ptr = (pes_camera_component_ptr + 0x1060) as *mut f32;
+        let angle_ptr = (pes_camera_component_ptr + 0x1064) as *mut f32;
+        let fov_ptr = (pes_camera_component_ptr + 0x1068) as *mut f32;
 
-        // Write to memory ONLY when values change to eliminate redundant writes
-        if current_hash != last_hash {
-            let zoom_ptr = (pes_camera_component_ptr + 0x105C) as *mut f32;
-            let height_ptr = (pes_camera_component_ptr + 0x1060) as *mut f32;
-            let angle_ptr = (pes_camera_component_ptr + 0x1064) as *mut f32;
-            let fov_ptr = (pes_camera_component_ptr + 0x1068) as *mut f32;
+        let mem_zoom = *zoom_ptr;
+        let mem_height = *height_ptr;
+        let mem_angle = *angle_ptr;
+        let mem_fov = *fov_ptr;
 
-            *zoom_ptr = target_zoom;
-            *height_ptr = target_height;
-            *angle_ptr = target_angle;
-            *fov_ptr = target_fov;
+        let should_log = match calls {
+            1 | 2 | 3 | 100 | 1000 => true,
+            c if c > 1000 && c % 50000 == 0 => true,
+            _ => false,
+        };
 
-            LAST_CAMERA_HASH.store(current_hash, Ordering::Relaxed);
+        if should_log {
+            crate::log_msg(&format!(
+                "[CAMERA DETOUR] calls={} ptr=0x{:X} mem_zoom={:.2} mem_height={:.2} mem_angle={:.2} mem_fov={:.1} desired_zoom={:.2} desired_height={:.2} desired_angle={:.2} desired_fov={:.1}",
+                calls,
+                pes_camera_component_ptr,
+                mem_zoom,
+                mem_height,
+                mem_angle,
+                mem_fov,
+                target_zoom,
+                target_height,
+                target_angle,
+                target_fov
+            ));
+        }
+
+        if mem_zoom.is_finite() && mem_zoom.abs() <= 100000.0 {
+            if (mem_zoom - target_zoom).abs() > 0.0001 {
+                *zoom_ptr = target_zoom;
+            }
+        } else if !SANITY_WARN_LOGGED.swap(true, Ordering::Relaxed) {
+            crate::log_msg(&format!(
+                "[CAMERA DETOUR] Warning: Invalid or non-finite memory value for zoom: {}",
+                mem_zoom
+            ));
+        }
+
+        if mem_height.is_finite() && mem_height.abs() <= 100000.0 {
+            if (mem_height - target_height).abs() > 0.0001 {
+                *height_ptr = target_height;
+            }
+        } else if !SANITY_WARN_LOGGED.swap(true, Ordering::Relaxed) {
+            crate::log_msg(&format!(
+                "[CAMERA DETOUR] Warning: Invalid or non-finite memory value for height: {}",
+                mem_height
+            ));
+        }
+
+        if mem_angle.is_finite() && mem_angle.abs() <= 100000.0 {
+            if (mem_angle - target_angle).abs() > 0.0001 {
+                *angle_ptr = target_angle;
+            }
+        } else if !SANITY_WARN_LOGGED.swap(true, Ordering::Relaxed) {
+            crate::log_msg(&format!(
+                "[CAMERA DETOUR] Warning: Invalid or non-finite memory value for angle: {}",
+                mem_angle
+            ));
+        }
+
+        if mem_fov.is_finite() && mem_fov.abs() <= 100000.0 {
+            if (mem_fov - target_fov).abs() > 0.0001 {
+                *fov_ptr = target_fov;
+            }
+        } else if !SANITY_WARN_LOGGED.swap(true, Ordering::Relaxed) {
+            crate::log_msg(&format!(
+                "[CAMERA DETOUR] Warning: Invalid or non-finite memory value for fov: {}",
+                mem_fov
+            ));
         }
     }
 }
@@ -545,14 +584,28 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_camera_hash() {
-        let cfg1 = CameraConfig::default();
-        let mut cfg2 = CameraConfig::default();
-        cfg2.zoom = 1.0;
+    fn test_camera_memory_write_detour() {
+        let mut mock_buffer = [0u8; 0x1070 + 16];
+        let ptr = mock_buffer.as_mut_ptr() as usize;
 
-        let h1 = compute_camera_hash(&cfg1);
-        let h2 = compute_camera_hash(&cfg2);
-        assert_ne!(h1, h2);
+        unsafe {
+            let z_ptr = (ptr + 0x105C) as *mut f32;
+            let h_ptr = (ptr + 0x1060) as *mut f32;
+            let a_ptr = (ptr + 0x1064) as *mut f32;
+            let fov_ptr = (ptr + 0x1068) as *mut f32;
+
+            *z_ptr = 1.0;
+            *h_ptr = 1.0;
+            *a_ptr = 0.0;
+            *fov_ptr = 55.0;
+
+            sider_camera_tick_detour(ptr);
+
+            assert!((*z_ptr - 0.82).abs() < 0.001);
+            assert!((*h_ptr - 1.32).abs() < 0.001);
+            assert!((*a_ptr - (-0.12)).abs() < 0.001);
+            assert!((*fov_ptr - 50.0).abs() < 0.001);
+        }
     }
 
     #[test]
