@@ -11,11 +11,14 @@ mod teams;
 
 use std::ffi::c_void;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Once, OnceLock};
 use std::thread;
 use std::time::Duration;
 use windows_sys::Win32::Foundation::{BOOL, HMODULE, TRUE};
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
+
+const SIDER_VERSION: &str = "v1.1";
 
 /// Funzione di log principale di Sider: inoltra al modulo logger asincrono
 pub fn log_msg(msg: &str) {
@@ -24,6 +27,7 @@ pub fn log_msg(msg: &str) {
 
 static REAL_DXGI: OnceLock<HMODULE> = OnceLock::new();
 static SIDER_INITIALIZED: Once = Once::new();
+static FIRST_FORWARD_LOGGED: AtomicBool = AtomicBool::new(false);
 
 fn get_real_dxgi() -> HMODULE {
     *REAL_DXGI.get_or_init(|| {
@@ -51,6 +55,12 @@ unsafe fn forward_cached_call(
     d: *mut c_void,
 ) -> u32 {
     ensure_sider_initialized();
+    if !FIRST_FORWARD_LOGGED.swap(true, Ordering::Relaxed) {
+        let name = std::str::from_utf8(proc_name)
+            .unwrap_or("unknown")
+            .trim_matches('\0');
+        log_msg(&format!("[DXGI FORWARD] First exported function called by game: {}", name));
+    }
     let addr = get_proc_cached(slot, proc_name);
     if addr != 0 {
         let func: unsafe extern "system" fn(*mut c_void, *mut c_void, *mut c_void, *mut c_void) -> u32 =
@@ -123,7 +133,7 @@ fn ensure_sider_initialized() {
 }
 
 fn worker_loop() {
-    log_msg("=== eFootball Sider Core Initializing Outside Loader Lock ===");
+    log_msg(&format!("=== eFootball Sider Core {} Initializing Outside Loader Lock ===", SIDER_VERSION));
     let ini_candidates = [
         "sider.ini",
         "../sider.ini",
@@ -174,6 +184,7 @@ fn worker_loop() {
 pub unsafe extern "system" fn DllMain(_hinst: HMODULE, reason: u32, _reserved: *mut c_void) -> BOOL {
     if reason == 1 {
         log_msg("SIDER DLL_PROCESS_ATTACH triggered safely.");
+        ensure_sider_initialized();
     }
     TRUE
 }
