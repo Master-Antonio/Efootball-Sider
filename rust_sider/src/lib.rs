@@ -10,7 +10,7 @@ mod server;
 mod teams;
 
 use std::ffi::c_void;
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Once, OnceLock};
 use std::thread;
@@ -20,7 +20,7 @@ use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
 
 const SIDER_VERSION: &str = "v1.1";
 
-/// Funzione di log principale di Sider: inoltra al modulo logger asincrono
+/// Main Sider log function: forwards to the async logger module
 pub fn log_msg(msg: &str) {
     logger::log_async(msg);
 }
@@ -28,6 +28,7 @@ pub fn log_msg(msg: &str) {
 static REAL_DXGI: OnceLock<HMODULE> = OnceLock::new();
 static SIDER_INITIALIZED: Once = Once::new();
 static FIRST_FORWARD_LOGGED: AtomicBool = AtomicBool::new(false);
+static SIDER_MODULE: OnceLock<HMODULE> = OnceLock::new();
 
 fn get_real_dxgi() -> HMODULE {
     *REAL_DXGI.get_or_init(|| {
@@ -132,21 +133,63 @@ fn ensure_sider_initialized() {
     });
 }
 
-fn worker_loop() {
-    log_msg(&format!("=== eFootball Sider Core {} Initializing Outside Loader Lock ===", SIDER_VERSION));
-    let ini_candidates = [
-        "sider.ini",
-        "../sider.ini",
-        "../../sider.ini",
-    ];
-    let mut sider_ini_path = None;
-    for cand in ini_candidates {
-        let p = Path::new(cand);
-        if p.exists() {
-            sider_ini_path = Some(p.to_path_buf());
-            break;
+/// Returns the directory that contains the Sider dxgi.dll itself.
+/// This is independent from the process working directory, which can change
+/// depending on how the game is launched (Steam, batch file, direct exe).
+fn get_module_dir() -> Option<PathBuf> {
+    let h = SIDER_MODULE.get().copied()?;
+    let mut buffer = [0u16; 1024];
+    let len = unsafe {
+        windows_sys::Win32::System::LibraryLoader::GetModuleFileNameW(
+            h,
+            buffer.as_mut_ptr(),
+            buffer.len() as u32,
+        )
+    };
+    if len == 0 {
+        return None;
+    }
+    let s = String::from_utf16_lossy(&buffer[..len as usize]);
+    PathBuf::from(s).parent().map(|d| d.to_path_buf())
+}
+
+/// Locates sider.ini. Priority order:
+/// 1. Next to the Sider DLL (most reliable, independent from CWD)
+/// 2. Parent of the DLL directory
+/// 3. Legacy CWD-relative candidates
+fn find_sider_ini() -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Some(dir) = get_module_dir() {
+        log_msg(&format!("[INI] Sider DLL directory: {:?}", dir));
+        candidates.push(dir.join("sider.ini"));
+        if let Some(parent) = dir.parent() {
+            candidates.push(parent.join("sider.ini"));
         }
     }
+
+    candidates.push(PathBuf::from("sider.ini"));
+    candidates.push(PathBuf::from("../sider.ini"));
+    candidates.push(PathBuf::from("../../sider.ini"));
+
+    for c in &candidates {
+        if c.exists() {
+            log_msg(&format!("[INI] Found sider.ini at: {:?}", c));
+            return Some(c.clone());
+        }
+        log_msg(&format!("[INI] Not found: {:?}", c));
+    }
+    None
+}
+
+fn worker_loop() {
+    log_msg(&format!("=== eFootball Sider Core {} Initializing Outside Loader Lock ===", SIDER_VERSION));
+
+    if let Ok(cwd) = std::env::current_dir() {
+        log_msg(&format!("[INI] Process working directory (CWD): {:?}", cwd));
+    }
+
+    let sider_ini_path = find_sider_ini();
 
     let mut root_dirs = Vec::new();
     if let Some(ref ini_p) = sider_ini_path {
@@ -157,11 +200,14 @@ fn worker_loop() {
             log_msg(&format!(" [CPK ROOT] Active Package: '{}' @ {:?}", m.name, m.path));
             root_dirs.push(m.path.clone());
         }
-
         camera::load_camera_config_from_ini(ini_p);
-        camera::start_camera_hook(sider_ini_path.clone());
-        log_msg("Camera & FOV real-time controller engaged.");
+    } else {
+        log_msg("[INI] WARNING: sider.ini not found anywhere. Camera will use default settings.");
     }
+
+    // Camera subsystem ALWAYS starts, even when sider.ini is missing
+    camera::start_camera_hook(sider_ini_path.clone());
+    log_msg("Camera & FOV real-time controller engaged.");
 
     livecpk::init_livecpk(root_dirs.clone());
 
@@ -195,8 +241,10 @@ unsafe fn is_game_process() -> bool {
 }
 
 #[no_mangle]
-pub unsafe extern "system" fn DllMain(_hinst: HMODULE, reason: u32, _reserved: *mut c_void) -> BOOL {
+pub unsafe extern "system" fn DllMain(hinst: HMODULE, reason: u32, _reserved: *mut c_void) -> BOOL {
     if reason == 1 {
+        // Remember our own module handle so we can locate sider.ini next to the DLL
+        let _ = SIDER_MODULE.set(hinst);
         if is_game_process() {
             log_msg("SIDER DLL_PROCESS_ATTACH triggered in game process.");
             ensure_sider_initialized();

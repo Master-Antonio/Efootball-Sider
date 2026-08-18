@@ -31,9 +31,10 @@ fn logger_worker(rx: Receiver<String>) {
 
     let mut writer = BufWriter::with_capacity(BUFFER_CAPACITY, file);
 
-    while let Ok(msg) = rx.recv() {
+       while let Ok(msg) = rx.recv() {
         let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
         let _ = writeln!(writer, "[{}][SIDER] {}", timestamp, msg);
+        let _ = writer.flush();
 
         // Drena tutti i messaggi successivi già presenti nel canale senza bloccarsi
         loop {
@@ -41,6 +42,7 @@ fn logger_worker(rx: Receiver<String>) {
                 Ok(next_msg) => {
                     let ts = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
                     let _ = writeln!(writer, "[{}][SIDER] {}", ts, next_msg);
+                    let _ = writer.flush();
                 }
                 Err(TryRecvError::Empty) => {
                     // La coda è vuota: eseguiamo il flush del buffer su disco

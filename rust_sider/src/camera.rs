@@ -1,3 +1,4 @@
+use pelite::pattern;
 use pelite::pe64::{Pe, PeView};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -10,6 +11,52 @@ use windows_sys::Win32::System::LibraryLoader::GetModuleHandleA;
 use windows_sys::Win32::System::Memory::{
     VirtualAlloc, VirtualProtect, MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE,
 };
+
+use windows_sys::Win32::System::Diagnostics::Debug::{
+    AddVectoredExceptionHandler, EXCEPTION_POINTERS,
+};
+
+/// SEH return code: continue searching for another handler
+const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
+
+static VEH_INSTALLED: AtomicBool = AtomicBool::new(false);
+
+/// SEH handler: logs any hardware exception (access violation, etc.)
+/// that catch_unwind cannot see
+unsafe extern "system" fn camera_veh_handler(info: *mut EXCEPTION_POINTERS) -> i32 {
+    if let Some(record) = (*info).ExceptionRecord.as_ref() {
+        crate::log_msg(&format!(
+            "[CAMERA VEH] SEH Exception! Code: 0x{:08X} at Address: 0x{:X}",
+            record.ExceptionCode,
+            record.ExceptionAddress as usize
+        ));
+    }
+    EXCEPTION_CONTINUE_SEARCH
+}
+
+fn install_camera_veh() {
+    if !VEH_INSTALLED.swap(true, Ordering::SeqCst) {
+        unsafe {
+            AddVectoredExceptionHandler(1, Some(camera_veh_handler));
+        }
+        crate::log_msg("[CAMERA DIAG] VEH handler installed for SEH diagnostics");
+    }
+}
+
+/// Writes directly to a sentinel file, bypassing the async logger.
+/// Used to determine whether the camera thread or the logger is dead.
+fn sentinella(msg: &str) {
+    use std::io::Write;
+    let ts = chrono::Local::now().format("%H:%M:%S%.3f");
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("camera_sentinel.log")
+    {
+        let _ = writeln!(f, "[{}] {}", ts, msg);
+        let _ = f.flush();
+    }
+}
 
 /// List of alternative AOB patterns for multi-version game compatibility
 pub const CAMERA_AOB_PATTERNS: &[&str] = &[
@@ -247,6 +294,14 @@ pub unsafe extern "C" fn sider_camera_tick_detour(pes_camera_component_ptr: usiz
             _ => false,
         };
 
+        // Sentinel for the first 3 calls only (zero performance impact)
+        if calls <= 3 {
+            sentinella(&format!(
+                "DETOUR call #{} ptr=0x{:X} mem_zoom={:.2} mem_height={:.2} mem_angle={:.2} mem_fov={:.1} target_zoom={:.2} target_fov={:.1}",
+                calls, pes_camera_component_ptr, mem_zoom, mem_height, mem_angle, mem_fov, target_zoom, target_fov
+            ));
+        }
+
         if should_log {
             crate::log_msg(&format!(
                 "[CAMERA DETOUR] calls={} ptr=0x{:X} mem_zoom={:.2} mem_height={:.2} mem_angle={:.2} mem_fov={:.1} desired_zoom={:.2} desired_height={:.2} desired_angle={:.2} desired_fov={:.1}",
@@ -309,46 +364,46 @@ pub unsafe extern "C" fn sider_camera_tick_detour(pes_camera_component_ptr: usiz
     }
 }
 
-/// Scans the .text section with multi-pattern fallback, allocates executable trampoline, and installs inline detour hook
+/// Scans the .text section using the compile-time pattern! macro (proven working),
+/// allocates executable trampoline, and installs the inline detour
 pub fn install_pes_camera_pelite_hook() -> bool {
     unsafe {
+        sentinella("install: getting module handle");
         let h_mod = GetModuleHandleA(std::ptr::null());
         if h_mod == 0 {
+            sentinella("install:Error module handle null");
             crate::log_msg("[CAMERA] ERROR: Could not get main module handle");
             return false;
         }
-
+ sentinella("install:creating PeView");
+        crate::log_msg("[CAMERA DIAG] Creating PeView");
         let pe_view = PeView::module(h_mod as *const u8);
+        sentinella("install: PeView created OK");
+        crate::log_msg("[CAMERA DIAG] PeView created successfully");
 
-        let mut matched_rva = None;
-        let mut matched_pattern_idx = 0;
+        // Use the compile-time pattern! macro (this is the exact version that matched yesterday)
+                sentinella("install: calling finds_code");
 
-        // Try each pattern sequentially with dynamic parsing
-        for (idx, pat_str) in CAMERA_AOB_PATTERNS.iter().enumerate() {
-            if let Ok(atoms) = pelite::pattern::parse(pat_str) {
-                let mut save = [0u32; 4];
-                if pe_view.scanner().finds_code(&atoms, &mut save) {
-                    matched_rva = Some(save[0] as usize);
-                    matched_pattern_idx = idx;
-                    break;
-                }
-            }
+        crate::log_msg("[CAMERA DIAG] Starting finds_code scan (compile-time macro)");
+        let pat = pattern!("F3 0F 10 B6 5C 10 00 00 F3 0F 10 BE 60 10 00 00 F3 44 0F 10 86 64 10 00 00 F3 44 0F 10 8E 68 10 00 00");
+        let mut save = [0u32; 4];
+        let found = pe_view.scanner().finds_code(pat, &mut save);
+         sentinella(&format!("install: finds_code returned {}", found));
+        crate::log_msg(&format!("[CAMERA DIAG] finds_code returned: {}", found));
+
+        if !found {
+            sentinella("install: pattern NOT found, aborting");
+            crate::log_msg("[CAMERA] ERROR: AOB pattern not found in .text section");
+            return false;
         }
 
-        let hook_rva = match matched_rva {
-            Some(rva) => rva,
-            None => {
-                crate::log_msg("[CAMERA] ERROR: None of the AOB patterns matched in .text section");
-                return false;
-            }
-        };
+        sentinella(&format!("install: pattern FOUND at RVA 0x{:X}", save[0]));
 
+        let hook_rva = save[0] as usize;
         let hook_addr = (h_mod as usize) + hook_rva;
         crate::log_msg(&format!(
-            "[CAMERA] AOB pattern #{} matched at RVA 0x{:X} (Absolute Addr: 0x{:X})",
-            matched_pattern_idx + 1,
-            hook_rva,
-            hook_addr
+            "[CAMERA] AOB pattern matched at RVA 0x{:X} (Absolute Addr: 0x{:X})",
+            hook_rva, hook_addr
         ));
 
         // Allocate 256-byte executable trampoline
@@ -364,11 +419,11 @@ pub fn install_pes_camera_pelite_hook() -> bool {
             return false;
         }
 
-        const PATTERN_SIZE: usize = 34; // 8 + 8 + 9 + 9 bytes
+        const PATTERN_SIZE: usize = 34;
         let return_addr = hook_addr + PATTERN_SIZE;
         let handler_addr = sider_camera_tick_detour as *const () as usize;
 
-        // Build x64 shellcode: preserve registers, pass RSI to RCX, call detour handler, restore registers, execute original instructions, jump back
+        // Build x64 shellcode: preserve registers, pass RSI to RCX, call detour, restore, execute original, jump back
         let mut shellcode: Vec<u8> = vec![
             0x50,                   // push rax
             0x51,                   // push rcx
@@ -377,8 +432,8 @@ pub fn install_pes_camera_pelite_hook() -> bool {
             0x41, 0x51,             // push r9
             0x41, 0x52,             // push r10
             0x41, 0x53,             // push r11
-            0x48, 0x83, 0xEC, 0x28, // sub rsp, 0x28 (shadow space + 16-byte stack alignment)
-            0x48, 0x89, 0xF1,       // mov rcx, rsi (pass camera component pointer as 1st parameter)
+            0x48, 0x83, 0xEC, 0x28, // sub rsp, 0x28
+            0x48, 0x89, 0xF1,       // mov rcx, rsi
             0x48, 0xB8,             // mov rax, <handler_addr>
         ];
         shellcode.extend_from_slice(&handler_addr.to_le_bytes());
@@ -404,7 +459,7 @@ pub fn install_pes_camera_pelite_hook() -> bool {
 
         std::ptr::copy_nonoverlapping(shellcode.as_ptr(), tramp, shellcode.len());
 
-        // Install 64-bit JMP hook with NOP padding
+        // Install 64-bit JMP with NOP padding
         let mut old_protect = 0u32;
         if VirtualProtect(hook_addr as _, PATTERN_SIZE, PAGE_EXECUTE_READWRITE, &mut old_protect) != 0 {
             let mut hook_patch: Vec<u8> = vec![0xFF, 0x25, 0x00, 0x00, 0x00, 0x00];
@@ -416,11 +471,12 @@ pub fn install_pes_camera_pelite_hook() -> bool {
 
             let mut dummy = 0u32;
             VirtualProtect(hook_addr as _, PATTERN_SIZE, old_protect, &mut dummy);
-            crate::log_msg("[CAMERA] Inline detour hook installed successfully");
+             sentinella("install: hook INSTALLED successfully");
+            crate::log_msg("[CAMERA] Inline detour installed successfully");
             return true;
         }
 
-        crate::log_msg("[CAMERA] ERROR: VirtualProtect failed during hook installation");
+        crate::log_msg("[CAMERA] ERROR: VirtualProtect failed during installation");
         false
     }
 }
@@ -507,40 +563,87 @@ pub fn scan_camera_fallback_memory() -> Option<usize> {
 pub fn start_camera_hook(ini_path_opt: Option<PathBuf>) {
     thread::spawn(move || {
         crate::log_msg("=== Camera Controller Hook Engine Started ===");
+
+               // Install VEH handler to catch SEH exceptions (access violations, etc.)
+        install_camera_veh();
+        sentinella("Camera thread alive, starting countdown");
+
+        // Countdown with 1-second heartbeats so we can see exactly where it stops
+        for i in (1..=5).rev() {
+            crate::log_msg(&format!("[CAMERA DIAG] Waiting for game load... {}s remaining", i));
+            sentinella(&format!("Countdown: {}s remaining", i));
+            thread::sleep(Duration::from_secs(1));
+        }
+
+        sentinella("Delay complete, starting hook installation");
+        crate::log_msg("[CAMERA DIAG] Delay complete, starting hook installation");
+
         let mut last_ini_mod_time = SystemTime::UNIX_EPOCH;
         let mut hook_installed = false;
 
-        // 1. Primary Attempt: Inline AOB Detour Hook via Pelite
-        for attempt in 1..=10 {
-            if install_pes_camera_pelite_hook() {
-                hook_installed = true;
-                CAMERA_MODE_STATUS.store(CAMERA_MODE_AOB, Ordering::SeqCst);
-                crate::log_msg(&format!(
-                    "🎉 [PELITE CAMERA HOOK] Successfully hooked PesCameraComponent in .text section on attempt #{}! (Active Mode: AOB)",
-                    attempt
-                ));
-                break;
+        // Wrap installation in catch_unwind to capture any panic
+        let install_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            for attempt in 1..=10 {
+                crate::log_msg(&format!("[CAMERA DIAG] Attempt #{}", attempt));
+                if install_pes_camera_pelite_hook() {
+                    return true;
+                }
+                thread::sleep(Duration::from_millis(500));
             }
-            thread::sleep(Duration::from_millis(500));
+            false
+        }));
+
+        match install_result {
+            Ok(installed) => {
+                if installed {
+                    hook_installed = true;
+                    CAMERA_MODE_STATUS.store(CAMERA_MODE_AOB, Ordering::SeqCst);
+                    crate::log_msg("🎉 [PELITE CAMERA HOOK] Successfully hooked PesCameraComponent (Active Mode: AOB)");
+                }
+            }
+            Err(payload) => {
+                let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = payload.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "unknown panic".to_string()
+                };
+                crate::log_msg(&format!("[CAMERA PANIC] Hook installation panicked: {}", msg));
+            }
         }
 
-        // 2. Validation & Fallback Memory Scanner
         if !hook_installed {
             CAMERA_MODE_STATUS.store(CAMERA_MODE_FALLBACK, Ordering::SeqCst);
             crate::log_msg("⚠️ [PELITE CAMERA HOOK] AOB pattern does not match this game version!");
-            crate::log_msg("💡 [ACTION REQUIRED] Please locate the new AOB signature with x64dbg or Cheat Engine and update CAMERA_AOB_PATTERNS.");
-            crate::log_msg("🔄 [CAMERA FALLBACK] Engaging secondary float-pair live RAM scanner mode (Active Mode: FALLBACK)...");
+            crate::log_msg("🔄 [CAMERA FALLBACK] Engaging secondary float-pair scanner (Active Mode: FALLBACK)...");
 
-            if let Some(candidate_addr) = scan_camera_fallback_memory() {
-                FALLBACK_CAMERA_ADDR.store(candidate_addr, Ordering::Relaxed);
-                crate::log_msg(&format!("✅ [CAMERA FALLBACK] Active on memory address 0x{:X}", candidate_addr));
-            } else {
-                crate::log_msg("⚠️ [CAMERA FALLBACK] No camera structures detected in dynamic RAM yet (will re-scan in background).");
+            let fb_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                scan_camera_fallback_memory()
+            }));
+
+            match fb_result {
+                Ok(Some(addr)) => {
+                    FALLBACK_CAMERA_ADDR.store(addr, Ordering::Relaxed);
+                    crate::log_msg(&format!("✅ [CAMERA FALLBACK] Active on 0x{:X}", addr));
+                }
+                Ok(None) => {
+                    crate::log_msg("⚠️ [CAMERA FALLBACK] No camera structures detected yet.");
+                }
+                Err(payload) => {
+                    let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = payload.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "unknown panic".to_string()
+                    };
+                    crate::log_msg(&format!("[CAMERA PANIC] Fallback scan panicked: {}", msg));
+                }
             }
         }
 
         loop {
-            // Apply fallback updates if AOB hook was not installed
             if !hook_installed {
                 let fb_addr = FALLBACK_CAMERA_ADDR.load(Ordering::Relaxed);
                 if fb_addr != 0 {
