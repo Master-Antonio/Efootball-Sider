@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::RwLock;
 use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleA;
 use windows_sys::Win32::System::Memory::{
     VirtualAlloc, VirtualProtect, MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE,
@@ -72,6 +72,25 @@ pub static CAMERA_TARGETS_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static DETOUR_CALL_COUNT: AtomicUsize = AtomicUsize::new(0);
 static NULL_PTR_LOGGED: AtomicBool = AtomicBool::new(false);
 static SANITY_WARN_LOGGED: AtomicBool = AtomicBool::new(false);
+
+/// Absolute address of the installed JMP patch (0 = not installed).
+/// Re-checked periodically by the heartbeat to detect anti-cheat/integrity reverts.
+static HOOK_PATCH_ADDR: AtomicUsize = AtomicUsize::new(0);
+static HOOK_REVERT_LOGGED: AtomicBool = AtomicBool::new(false);
+
+/// Re-reads the first bytes of the patched location and compares them against the
+/// `FF 25` (jmp qword ptr [rip+0]) opcode we wrote during installation.
+/// Returns None if no AOB hook is installed, Some(true) if intact, Some(false) if reverted.
+fn check_hook_integrity() -> Option<bool> {
+    let addr = HOOK_PATCH_ADDR.load(Ordering::Relaxed);
+    if addr == 0 {
+        return None;
+    }
+    unsafe {
+        let bytes = std::slice::from_raw_parts(addr as *const u8, 2);
+        Some(bytes == [0xFF, 0x25])
+    }
+}
 
 pub static CAMERA_STATE: RwLock<CameraConfig> = RwLock::new(CameraConfig {
     enabled: true,
@@ -386,6 +405,33 @@ pub fn install_pes_camera_pelite_hook() -> bool {
 
         crate::log_msg("[CAMERA DIAG] Starting finds_code scan (compile-time macro)");
         let pat = pattern!("F3 0F 10 B6 5C 10 00 00 F3 0F 10 BE 60 10 00 00 F3 44 0F 10 86 64 10 00 00 F3 44 0F 10 8E 68 10 00 00");
+
+        // Diagnostic: the pattern has no anchoring context (4 generic movss loads), so it may
+        // match more than one location in .text. finds_code() only ever installs the FIRST hit,
+        // which is silently wrong if that first hit is not the per-frame camera tick (e.g. a
+        // constructor/reset copy of the same struct layout). Enumerate every match so we can see
+        // in the log whether the pattern is ambiguous.
+        let mut all_matches: Vec<u32> = Vec::new();
+        {
+            let mut iter = pe_view.scanner().matches_code(pat);
+            let mut msave = [0u32; 4];
+            while iter.next(&mut msave) {
+                all_matches.push(msave[0]);
+                if all_matches.len() >= 16 {
+                    break;
+                }
+            }
+        }
+        crate::log_msg(&format!(
+            "[CAMERA DIAG] Pattern occurs {} time(s) in .text: {:?}",
+            all_matches.len(),
+            all_matches.iter().map(|rva| format!("0x{:X}", rva)).collect::<Vec<_>>()
+        ));
+        if all_matches.len() > 1 {
+            crate::log_msg("[CAMERA DIAG] WARNING: pattern is AMBIGUOUS (multiple matches). The installed hook uses the FIRST match only - if the camera never updates in a real match, this is the most likely cause and the pattern needs disambiguating context bytes.");
+        }
+        sentinella(&format!("install: match count={}", all_matches.len()));
+
         let mut save = [0u32; 4];
         let found = pe_view.scanner().finds_code(pat, &mut save);
          sentinella(&format!("install: finds_code returned {}", found));
@@ -471,6 +517,7 @@ pub fn install_pes_camera_pelite_hook() -> bool {
 
             let mut dummy = 0u32;
             VirtualProtect(hook_addr as _, PATTERN_SIZE, old_protect, &mut dummy);
+            HOOK_PATCH_ADDR.store(hook_addr, Ordering::SeqCst);
              sentinella("install: hook INSTALLED successfully");
             crate::log_msg("[CAMERA] Inline detour installed successfully");
             return true;
@@ -643,6 +690,9 @@ pub fn start_camera_hook(ini_path_opt: Option<PathBuf>) {
             }
         }
 
+        let mut last_heartbeat = Instant::now();
+        let mut last_heartbeat_calls = 0usize;
+
         loop {
             if !hook_installed {
                 let fb_addr = FALLBACK_CAMERA_ADDR.load(Ordering::Relaxed);
@@ -666,6 +716,40 @@ pub fn start_camera_hook(ini_path_opt: Option<PathBuf>) {
                     }
                 }
             }
+
+            // Heartbeat every ~3s: makes it possible to tell "detour never fires" apart from
+            // "logger died", and catches an anti-cheat/integrity revert of the JMP patch.
+            if last_heartbeat.elapsed() >= Duration::from_secs(3) {
+                let calls = DETOUR_CALL_COUNT.load(Ordering::Relaxed);
+                let delta = calls.saturating_sub(last_heartbeat_calls);
+                last_heartbeat_calls = calls;
+                last_heartbeat = Instant::now();
+
+                match check_hook_integrity() {
+                    Some(true) => {
+                        crate::log_msg(&format!(
+                            "[CAMERA HEARTBEAT] mode={} total_calls={} calls_last_3s={} hook_bytes=intact",
+                            get_camera_active_mode_name(), calls, delta
+                        ));
+                    }
+                    Some(false) => {
+                        if !HOOK_REVERT_LOGGED.swap(true, Ordering::Relaxed) {
+                            crate::log_msg("[CAMERA HEARTBEAT] ⚠️ WARNING: patched JMP bytes at hook address no longer match what we wrote - the patch was REVERTED (likely by anti-cheat/integrity check). This explains why the detour stops firing after install.");
+                        }
+                        crate::log_msg(&format!(
+                            "[CAMERA HEARTBEAT] mode={} total_calls={} calls_last_3s={} hook_bytes=REVERTED",
+                            get_camera_active_mode_name(), calls, delta
+                        ));
+                    }
+                    None => {
+                        crate::log_msg(&format!(
+                            "[CAMERA HEARTBEAT] mode={} total_calls={} calls_last_3s={}",
+                            get_camera_active_mode_name(), calls, delta
+                        ));
+                    }
+                }
+            }
+
             thread::sleep(Duration::from_millis(100));
         }
     });
