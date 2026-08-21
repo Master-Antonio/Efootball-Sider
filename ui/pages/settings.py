@@ -5,14 +5,11 @@ import shutil
 from pathlib import Path
 
 import qtawesome as qta
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
-    QCheckBox,
     QFileDialog,
-    QFormLayout,
     QHBoxLayout,
-    QLabel,
     QMessageBox,
     QPushButton,
     QRadioButton,
@@ -79,7 +76,7 @@ class SettingsPage(QWidget):
         # DLL Management buttons
         dll_btn_row = QHBoxLayout()
         dll_btn_row.setSpacing(10)
-        
+
         self.install_dll_btn = QPushButton("Installa / Aggiorna Sider dxgi.dll nel Gioco")
         self.install_dll_btn.setProperty("role", "primary")
         self.install_dll_btn.setIcon(qta.icon("fa6s.download", color="#FFFFFF"))
@@ -105,8 +102,12 @@ class SettingsPage(QWidget):
         content_form.setSpacing(10)
 
         self.content_group = QButtonGroup(self)
-        self.radio_game_content = QRadioButton("Cartella di Gioco (Steam): <GameRoot>/content (Consigliato per modifiche dirette)")
-        self.radio_sider_content = QRadioButton("Workspace Sider Studio: <SiderRoot>/content (Isolato da aggiornamenti Steam)")
+        self.radio_game_content = QRadioButton(
+            "Cartella di Gioco (Steam): <GameRoot>/content (Consigliato per modifiche dirette)"
+        )
+        self.radio_sider_content = QRadioButton(
+            "Workspace Sider Studio: <SiderRoot>/content (Isolato da aggiornamenti Steam)"
+        )
         self.radio_custom_content = QRadioButton("Percorso Personalizzato...")
 
         self.content_group.addButton(self.radio_game_content, 0)
@@ -169,25 +170,49 @@ class SettingsPage(QWidget):
 
     def _refresh_metrics(self) -> None:
         exe_valid = self.context.paths.game_exe.is_file()
-        cpk_count = len(list(self.context.paths.game_cpk.glob("*.cpk"))) if self.context.paths.game_cpk.is_dir() else 0
+        cpk_count = (
+            len(list(self.context.paths.game_cpk.glob("*.cpk")))
+            if self.context.paths.game_cpk.is_dir()
+            else 0
+        )
         dll_installed = self.context.paths.is_dll_installed()
         content_exists = self.context.paths.content.is_dir()
 
         self.metrics.set_metrics(
             (
-                Metric("eFootball Executable", "Rilevato (Win64)" if exe_valid else "Non trovato", "success" if exe_valid else "danger"),
-                Metric("CPK Archives", f"{cpk_count} archivi" if cpk_count else "Non trovati", "success" if cpk_count else "warning"),
-                Metric("Sider DLL Status", "Installata (dxgi.dll)" if dll_installed else "Non presente", "success" if dll_installed else "warning"),
-                Metric("Active Content", "Attiva" if content_exists else "Da creare", "success" if content_exists else "warning"),
+                Metric(
+                    "eFootball Executable",
+                    "Rilevato (Win64)" if exe_valid else "Non trovato",
+                    "success" if exe_valid else "danger",
+                ),
+                Metric(
+                    "CPK Archives",
+                    f"{cpk_count} archivi" if cpk_count else "Non trovati",
+                    "success" if cpk_count else "warning",
+                ),
+                Metric(
+                    "Sider DLL Status",
+                    "Installata (dxgi.dll)" if dll_installed else "Non presente",
+                    "success" if dll_installed else "warning",
+                ),
+                Metric(
+                    "Active Content",
+                    "Attiva" if content_exists else "Da creare",
+                    "success" if content_exists else "warning",
+                ),
             )
         )
 
         if exe_valid and dll_installed:
             self.banner.set_message("Ambiente di gioco e Sider configurati correttamente.", "success")
         elif exe_valid:
-            self.banner.set_message("eFootball rilevato. Installa o aggiorna la DLL dxgi.dll per attivare Sider.", "info")
+            self.banner.set_message(
+                "eFootball rilevato. Installa o aggiorna la DLL dxgi.dll per attivare Sider.", "info"
+            )
         else:
-            self.banner.set_message("Seleziona la cartella di installazione corretta di eFootball.", "warning")
+            self.banner.set_message(
+                "Seleziona la cartella di installazione corretta di eFootball.", "warning"
+            )
 
     def _on_content_mode_changed(self) -> None:
         if self.radio_game_content.isChecked():
@@ -227,7 +252,9 @@ class SettingsPage(QWidget):
             self._update_temporary_game_root(detected)
             self.banner.set_message(f"eFootball rilevato automaticamente: {detected}", "success")
         else:
-            self.banner.set_message("Nessuna installazione Steam di eFootball rilevata automaticamente.", "warning")
+            self.banner.set_message(
+                "Nessuna installazione Steam di eFootball rilevata automaticamente.", "warning"
+            )
 
     def _update_temporary_game_root(self, new_root: Path) -> None:
         self.context.paths.game_root = new_root
@@ -262,7 +289,9 @@ class SettingsPage(QWidget):
             # Also ensure sider.ini is in game bin
             if self.context.paths.sider_ini.is_file():
                 shutil.copy2(self.context.paths.sider_ini, dst_dir / "sider.ini")
-            self.banner.set_message(f"✅ Sider dxgi.dll e sider.ini installati con successo in {dst_dir}!", "success")
+            self.banner.set_message(
+                f"✅ Sider dxgi.dll e sider.ini installati con successo in {dst_dir}!", "success"
+            )
             self._refresh_metrics()
         except Exception as exc:
             self.banner.set_message(f"Errore durante l'installazione della DLL: {exc}", "error")

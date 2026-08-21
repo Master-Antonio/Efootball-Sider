@@ -1,18 +1,13 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import qtawesome as qta
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QCheckBox,
     QHBoxLayout,
-    QHeaderView,
     QInputDialog,
     QLineEdit,
     QMessageBox,
     QPushButton,
-    QSplitter,
     QTabBar,
     QTableView,
     QVBoxLayout,
@@ -65,7 +60,10 @@ class ServersPage(QWidget):
         toolbar.addWidget(refresh_btn)
         layout.addLayout(toolbar)
 
-        self.banner = StatusBanner("I moduli Server (KitServer, StadiumServer, BallServer) assegnano asset dinamici in RAM per Team ID.", "info")
+        self.banner = StatusBanner(
+            "I moduli Server (KitServer, StadiumServer, BallServer) assegnano asset dinamici in RAM per Team ID.",
+            "info",
+        )
         layout.addWidget(self.banner)
 
         self.metrics = MetricStrip(
@@ -134,40 +132,54 @@ class ServersPage(QWidget):
         self.metrics.set_metrics(
             (
                 Metric("KitServer", f"{len(kit_entries)} squadre", "success" if kit_entries else "neutral"),
-                Metric("StadiumServer", f"{len(stad_entries)} stadi", "success" if stad_entries else "neutral"),
-                Metric("BallServer", f"{len(ball_entries)} palloni", "success" if ball_entries else "neutral"),
+                Metric(
+                    "StadiumServer", f"{len(stad_entries)} stadi", "success" if stad_entries else "neutral"
+                ),
+                Metric(
+                    "BallServer", f"{len(ball_entries)} palloni", "success" if ball_entries else "neutral"
+                ),
             )
         )
 
         records = []
         if self._current_tab == 0:
             for p in sorted(kit_entries):
-                sub_items = [f.name for f in p.iterdir() if f.is_dir() or f.suffix.lower() in (".png", ".dds", ".uasset")]
-                records.append({
-                    "id": p.name,
-                    "name": f"Team #{p.name}",
-                    "kits_count": f"{len(sub_items)} elementi ({', '.join(sub_items[:4])})",
-                    "status": "Attivo (LiveCPK)",
-                    "folder": str(p),
-                })
+                sub_items = [
+                    f.name
+                    for f in p.iterdir()
+                    if f.is_dir() or f.suffix.lower() in (".png", ".dds", ".uasset")
+                ]
+                records.append(
+                    {
+                        "id": p.name,
+                        "name": f"Team #{p.name}",
+                        "kits_count": f"{len(sub_items)} elementi ({', '.join(sub_items[:4])})",
+                        "status": "Attivo (LiveCPK)",
+                        "folder": str(p),
+                    }
+                )
         elif self._current_tab == 1:
             for p in sorted(stad_entries):
-                records.append({
-                    "id": p.name,
-                    "name": f"Stadio #{p.name}",
-                    "kits_count": f"{len(list(p.iterdir()))} asset",
-                    "status": "Attivo (LiveCPK)",
-                    "folder": str(p),
-                })
+                records.append(
+                    {
+                        "id": p.name,
+                        "name": f"Stadio #{p.name}",
+                        "kits_count": f"{len(list(p.iterdir()))} asset",
+                        "status": "Attivo (LiveCPK)",
+                        "folder": str(p),
+                    }
+                )
         else:
             for p in sorted(ball_entries):
-                records.append({
-                    "id": p.stem,
-                    "name": p.name,
-                    "kits_count": "1 pallone",
-                    "status": "Attivo",
-                    "folder": str(p),
-                })
+                records.append(
+                    {
+                        "id": p.stem,
+                        "name": p.name,
+                        "kits_count": "1 pallone",
+                        "status": "Attivo",
+                        "folder": str(p),
+                    }
+                )
 
         self.model.set_records(records)
 
@@ -183,8 +195,16 @@ class ServersPage(QWidget):
 
     def _add_server_entry(self) -> None:
         sub = "kits" if self._current_tab == 0 else ("stadiums" if self._current_tab == 1 else "balls")
-        title = "Aggiungi Squadra KitServer" if self._current_tab == 0 else ("Aggiungi Stadio" if self._current_tab == 1 else "Aggiungi Pallone")
-        prompt = "Inserisci Team ID numerico (es. 102 per Real Madrid, 100 per Arsenal):" if self._current_tab == 0 else "Inserisci ID o Nome cartella:"
+        title = (
+            "Aggiungi Squadra KitServer"
+            if self._current_tab == 0
+            else ("Aggiungi Stadio" if self._current_tab == 1 else "Aggiungi Pallone")
+        )
+        prompt = (
+            "Inserisci Team ID numerico (es. 102 per Real Madrid, 100 per Arsenal):"
+            if self._current_tab == 0
+            else "Inserisci ID o Nome cartella:"
+        )
 
         val, ok = QInputDialog.getText(self, title, prompt)
         if ok and val.strip():
