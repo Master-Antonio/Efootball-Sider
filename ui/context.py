@@ -9,7 +9,6 @@ from .services.database import DatabaseService
 from .services.game import GameService
 from .services.memory import MemoryDiscoveryService
 from .services.paths import WorkspacePaths
-from .services.zen_builder import ZenBuilderService
 from .workers import TaskWorker
 
 
@@ -20,7 +19,6 @@ class AppContext:
     config: ConfigurationService
     game: GameService
     memory: MemoryDiscoveryService
-    zen_builder: ZenBuilderService
     thread_pool: QThreadPool
     workers: list[TaskWorker]
 
@@ -34,7 +32,6 @@ class AppContext:
             config=ConfigurationService(paths),
             game=GameService(paths),
             memory=MemoryDiscoveryService(),
-            zen_builder=ZenBuilderService(),
             thread_pool=QThreadPool.globalInstance(),
             workers=[],
         )

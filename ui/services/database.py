@@ -19,7 +19,7 @@ from ..core.pesdb import (
     parse_team_bin,
     validate_player_assignment_bin,
 )
-from ..core.wesys import pack_wesys_container, unpack_wesys_fast
+from ..core.wesys import unpack_wesys_fast
 from .paths import WorkspacePaths
 
 PESDB_TARGETS = (
@@ -92,14 +92,10 @@ class DatabaseService:
             relative = Path(*archive_path.split("/"))
             packed_path = output_dir / "packed" / relative
             decoded_path = output_dir / "decoded" / relative
-            vanilla_path = output_dir / "vanilla" / relative
             packed_path.parent.mkdir(parents=True, exist_ok=True)
             decoded_path.parent.mkdir(parents=True, exist_ok=True)
-            vanilla_path.parent.mkdir(parents=True, exist_ok=True)
             packed_path.write_bytes(packed)
             decoded_path.write_bytes(decoded)
-            if not vanilla_path.exists():
-                vanilla_path.write_bytes(decoded)
 
             file_manifest[entry.filename] = {
                 "archive_index": index,
@@ -177,53 +173,3 @@ class DatabaseService:
             writer = csv.DictWriter(stream, fieldnames=columns, extrasaction="ignore")
             writer.writeheader()
             writer.writerows(records)
-
-    def repack_and_deploy(
-        self,
-        bundle: DatabaseBundle,
-        target_cpk: Path | None = None,
-    ) -> int:
-        import shutil
-
-        targets = [target_cpk] if target_cpk else [
-            self.paths.game_cpk / "dt870_console_win.cpk",
-            self.paths.game_cpk / "dt200_console_all.cpk",
-        ]
-
-        total_replaced = 0
-        for cpk_path in targets:
-            if not cpk_path.is_file():
-                continue
-
-            bak_path = cpk_path.with_suffix(".cpk.bak")
-            if not bak_path.exists():
-                try:
-                    shutil.copy2(cpk_path, bak_path)
-                except Exception:
-                    pass
-
-            src_to_load = bak_path if bak_path.exists() else cpk_path
-            try:
-                archive = cpk.load(str(src_to_load))
-                has_updates = False
-                for idx, entry in enumerate(archive.files):
-                    decoded_file = bundle.decoded_path(entry.filename)
-                    if decoded_file.is_file():
-                        raw_data = decoded_file.read_bytes()
-                        packed_wesys = pack_wesys_container(raw_data, key_nibble=2, compression_level=1)
-                        archive.replace_bytes(idx, packed_wesys)
-                        total_replaced += 1
-                        has_updates = True
-
-                if has_updates:
-                    temp_cpk = cpk_path.with_suffix(".cpk.tmp")
-                    archive.save(str(temp_cpk))
-                    try:
-                        shutil.move(temp_cpk, cpk_path)
-                    except Exception:
-                        shutil.copy2(temp_cpk, cpk_path)
-                        temp_cpk.unlink(missing_ok=True)
-            except Exception as e:
-                pass
-
-        return total_replaced

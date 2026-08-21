@@ -22,6 +22,14 @@ class CameraSettings:
 
 
 @dataclass(frozen=True)
+class DbInjectionSettings:
+    enabled: bool = True
+    xor_mask: int = 0x6B
+    teams: dict[str, str] = None
+    players: dict[str, str] = None
+
+
+@dataclass(frozen=True)
 class ModInfo:
     folder: str
     name: str
@@ -43,7 +51,7 @@ def _normalize_root(value: str) -> str:
     return value.strip().strip('"').strip("'").replace("/", "\\").lower().rstrip("\\")
 
 
-def _read_section(path: Path, section_name: str) -> dict[str, str]:
+def _read_section(path: Path, section_name: str, preserve_case: bool = False) -> dict[str, str]:
     if not path.is_file():
         return {}
     values: dict[str, str] = {}
@@ -57,7 +65,8 @@ def _read_section(path: Path, section_name: str) -> dict[str, str]:
             continue
         if current == section_name.lower() and "=" in line:
             key, value = line.split("=", 1)
-            values[key.strip().lower()] = value.strip().strip('"').strip("'")
+            k = key.strip() if preserve_case else key.strip().lower()
+            values[k] = value.strip().strip('"').strip("'")
     return values
 
 
@@ -257,12 +266,30 @@ class ConfigurationService:
         self.set_mod_enabled(folder, False)
         shutil.rmtree(mod_path)
 
+    def read_db_injection(self) -> DbInjectionSettings:
+        general = _read_section(self.paths.sider_ini, "db_injection")
+        enabled = general.get("enabled", "1").lower() in {"1", "true", "yes", "on"}
+        mask_str = general.get("xor_mask", "0x6B")
+        try:
+            xor_mask = int(mask_str, 16) if mask_str.lower().startswith("0x") else int(mask_str)
+        except ValueError:
+            xor_mask = 0x6B
+        teams = _read_section(self.paths.sider_ini, "teams", preserve_case=True)
+        players = _read_section(self.paths.sider_ini, "players", preserve_case=True)
+        return DbInjectionSettings(
+            enabled=enabled,
+            xor_mask=xor_mask,
+            teams=teams or {},
+            players=players or {},
+        )
+
     @staticmethod
     def _read_mod_metadata(directory: Path) -> dict[str, str]:
         path = directory / "mod.ini"
         if not path.is_file():
             return {}
-        parser = configparser.ConfigParser(strict=False)
+        parser = configparser.ConfigParser(interpolation=None, strict=False)
+        parser.optionxform = str
         parser.read(path, encoding="utf-8")
         if parser.has_section("MOD"):
             return {key.lower(): value for key, value in parser.items("MOD")}

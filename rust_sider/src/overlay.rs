@@ -211,11 +211,11 @@ fn run_osd_window_thread() {
             }
             crate::log_msg("Visual OSD Topmost HUD Window successfully spawned on screen.");
             let mut msg: MSG = std::mem::zeroed();
-            while PeekMessageA(&mut msg, 0 as _, 0, 0, PM_REMOVE) != 0 || true {
-                if msg.message == 0x0012 { 
-                    break;
-                }
-                if msg.message != 0 {
+            loop {
+                while PeekMessageA(&mut msg, 0 as _, 0, 0, PM_REMOVE) != 0 {
+                    if msg.message == 0x0012 {
+                        return;
+                    }
                     DispatchMessageA(&msg);
                 }
                 thread::sleep(Duration::from_millis(16));

@@ -75,11 +75,17 @@ class GameService:
         source_dll = self.paths.built_dll if self.paths.built_dll.is_file() else self.paths.root_dll
         if not source_dll.is_file():
             raise FileNotFoundError("Build rust_sider before syncing")
+        if source_dll.resolve() != self.paths.root_dll.resolve():
+            shutil.copy2(source_dll, self.paths.root_dll)
         if source_dll.resolve() != self.paths.game_dll.resolve():
             shutil.copy2(source_dll, self.paths.game_dll)
         dest_ini = self.paths.game_bin / "sider.ini"
         if self.paths.sider_ini.resolve() != dest_ini.resolve():
             shutil.copy2(self.paths.sider_ini, dest_ini)
+        if self.paths.content.is_dir():
+            dest_content = self.paths.game_bin / "content"
+            if self.paths.content.resolve() != dest_content.resolve():
+                shutil.copytree(self.paths.content, dest_content, dirs_exist_ok=True)
         return self.status()
 
     @staticmethod

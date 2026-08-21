@@ -26,8 +26,6 @@ from .pages.database import DatabasePage
 from .pages.diagnostics import DiagnosticsPage
 from .pages.mods import ModsPage
 from .pages.overview import OverviewPage
-from .pages.servers import ServersPage
-from .pages.settings import SettingsPage
 
 
 @dataclass(frozen=True)
@@ -42,10 +40,8 @@ NAVIGATION = (
     NavigationItem("Assets", "Discovery and overrides", "fa6s.cubes"),
     NavigationItem("Database", "Players, teams and squads", "fa6s.database"),
     NavigationItem("Mods", "Packages and load order", "fa6s.box-archive"),
-    NavigationItem("Servers", "Kit, Stadium & Ball servers", "fa6s.shirt"),
     NavigationItem("Camera", "Match camera profiles", "fa6s.video"),
     NavigationItem("Diagnostics", "Logs and health checks", "fa6s.stethoscope"),
-    NavigationItem("Settings", "Game paths and configuration", "fa6s.gear"),
 )
 
 
@@ -173,17 +169,11 @@ class MainWindow(QMainWindow):
         mods = ModsPage(self.context)
         mods.status_message.connect(lambda message: self._show_page_status(3, message))
         self._stack.addWidget(mods)
-        servers = ServersPage(self.context)
-        servers.status_message.connect(lambda message: self._show_page_status(4, message))
-        self._stack.addWidget(servers)
         camera = CameraPage(self.context)
-        camera.status_message.connect(lambda message: self._show_page_status(5, message))
+        camera.status_message.connect(lambda message: self._show_page_status(4, message))
         camera.navigate_requested.connect(self.select_page)
         self._stack.addWidget(camera)
         self._stack.addWidget(DiagnosticsPage(self.context))
-        settings = SettingsPage(self.context)
-        settings.status_message.connect(lambda message: self._show_page_status(7, message))
-        self._stack.addWidget(settings)
         workspace_layout.addWidget(self._stack, 1)
         return workspace
 

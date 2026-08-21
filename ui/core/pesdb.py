@@ -85,43 +85,6 @@ def parse_player_bin(data: bytes) -> list[dict]:
     return records
 
 
-def update_player_record(
-    player_data: bytes,
-    player_id: int,
-    *,
-    display_name: str | None = None,
-    height_cm: int | None = None,
-    weight_kg: int | None = None,
-) -> bytes:
-    stride, name_offset = detect_player_layout(player_data)
-    records = parse_player_bin(player_data)
-    match_index = next((i for i, r in enumerate(records) if r["player_id"] == player_id), None)
-    if match_index is None:
-        raise ValueError(f"Player ID {player_id} non trovato in Player.bin")
-
-    out = bytearray(player_data)
-    offset = match_index * stride
-
-    if display_name is not None:
-        name_bytes = display_name.strip().encode("utf-8")[:60] + b"\x00"
-        for name_index in range(5):
-            pos = offset + name_offset + name_index * 61
-            out[pos : pos + 61] = name_bytes.ljust(61, b"\x00")
-
-    if height_cm is not None or weight_kg is not None:
-        chunk = out[offset : offset + stride]
-        packed = int.from_bytes(chunk, "little")
-        if height_cm is not None:
-            raw_h = (height_cm - 100 if stride == 392 else height_cm) & 0xFF
-            packed = (packed & ~(0xFF << 248)) | (raw_h << 248)
-        if weight_kg is not None:
-            raw_w = (weight_kg - 30 if stride == 392 else weight_kg) & 0x7F
-            packed = (packed & ~(0x7F << 280)) | (raw_w << 280)
-        out[offset : offset + stride] = packed.to_bytes(stride, "little")
-
-    return bytes(out)
-
-
 def collect_player_ids(player_data: bytes) -> set[int]:
     records = parse_player_bin(player_data)
     player_ids = [record["player_id"] for record in records]
@@ -307,69 +270,16 @@ def parse_team_bin(data: bytes) -> list[dict]:
     records = []
     for index, offset in enumerate(range(0, len(data), TEAM_RECORD_SIZE)):
         chunk = data[offset : offset + TEAM_RECORD_SIZE]
-        team_id = struct.unpack_from("<I", chunk, 12)[0]
-        name = chunk[396 : 396 + 70].split(b"\x00", 1)[0].decode("utf-8", errors="replace").strip()
-        short_name = chunk[886 : 886 + 10].split(b"\x00", 1)[0].decode("utf-8", errors="replace").strip()
         records.append(
             {
                 "row": index + 1,
                 "index": index,
                 "offset": f"0x{offset:06X}",
-                "team_id": team_id,
-                "name": name if name else f"Team #{team_id}",
-                "short_name": short_name if short_name else f"T{team_id}",
+                "team_id": struct.unpack_from("<I", chunk, 12)[0],
                 "hex": chunk[:16].hex(" "),
             }
         )
     return records
-
-
-def update_team_record(
-    team_data: bytes,
-    team_id: int,
-    *,
-    name: str | None = None,
-    short_name: str | None = None,
-) -> bytes:
-    if len(team_data) % TEAM_RECORD_SIZE:
-        raise ValueError("Team.bin non è allineato a record da 1.600 byte")
-    records = parse_team_bin(team_data)
-    match_index = next((i for i, r in enumerate(records) if r["team_id"] == team_id), None)
-    if match_index is None:
-        raise ValueError(f"Team ID {team_id} non trovato in Team.bin")
-
-    out = bytearray(team_data)
-    offset = match_index * TEAM_RECORD_SIZE
-
-    if name is not None:
-        name_clean = name.strip()
-        name_bytes = name_clean.encode("utf-8")[:69] + b"\x00"
-        # Zero-fill and write to all localized and international name slots
-        for name_pos in (116, 186, 396, 536, 746, 816, 1036):
-            out[offset + name_pos : offset + name_pos + 70] = b"\x00" * 70
-            out[offset + name_pos : offset + name_pos + len(name_bytes)] = name_bytes
-
-    if short_name is not None:
-        short_clean = short_name.strip().upper()
-        short_bytes = short_clean.encode("utf-8")[:9] + b"\x00"
-        out[offset + 886 : offset + 886 + 10] = b"\x00" * 10
-        out[offset + 886 : offset + 886 + len(short_bytes)] = short_bytes
-
-    return bytes(out)
-
-
-def extract_team_diffs(vanilla_data: bytes, modded_data: bytes) -> list[tuple[str, str]]:
-    van_teams = {t["team_id"]: t for t in parse_team_bin(vanilla_data)}
-    mod_teams = {t["team_id"]: t for t in parse_team_bin(modded_data)}
-    diffs = []
-    for tid, mod_t in mod_teams.items():
-        if tid in van_teams:
-            van_t = van_teams[tid]
-            if mod_t["name"] != van_t["name"] and van_t["name"]:
-                diffs.append((van_t["name"], mod_t["name"]))
-            if mod_t["short_name"] != van_t["short_name"] and van_t["short_name"]:
-                diffs.append((van_t["short_name"], mod_t["short_name"]))
-    return diffs
 
 
 def parse_team_color_bin(data: bytes) -> list[dict]:

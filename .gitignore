@@ -1,74 +1,95 @@
 # ==============================================================================
-# eFootball Sider Studio & Core Engine - .gitignore
+# eFootball Sider by Toriga - .gitignore
 # ==============================================================================
 
-# --- Rust & Cargo Build Artifacts ---
-target/
-**/target/
-*.pdb
-*.lib
-*.exp
-*.ilk
-*.obj
-*.dll
-*.exe
-
-# --- Python Environments & Caches ---
+# --- Python Bytecode & Cache ---
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyo
 *.pyd
-.venv/
-venv/
+.Python
 env/
+venv/
+.venv/
 ENV/
-*.egg-info/
+develop-eggs/
 dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# --- Rust & C++ Build Output ---
+target/
+**/target/
 build/
+*.obj
+*.exp
+*.lib
+*.ilk
+*.pdb
+/dxgi.dll
+
+# --- Testing & Quality Tools ---
 .pytest_cache/
-.ruff_cache/
-.mypy_cache/
 .coverage
 htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.ruff_cache/
 
-# --- Sider Studio Workspaces & Local Artifacts ---
-.workspace/
-artifacts/
-temp/
-tmp/
-scratch/
-.system_generated/
-*.log
-*.tmp
-*.bak
-*.raw_backup
-
-# --- Game Data, Dumps & Mods (Keep Source Code Clean) ---
-content/
-live_assets/
-*.dmp
-*.stackdump
-*.cpk.bak
-*.cpk.tmp
-*.ucas.bak
-*.utoc.bak
-camera_pattern_result.txt
-camera_sentinel.log
-sider_rust.log
-sider_gui.log
-
-# --- IDEs, Editors & OS Metadata ---
-.idea/
-.vscode/
-*.code-workspace
-*.swp
-*.swo
-*~
+# --- Operating System Artifacts ---
 Thumbs.db
 Thumbs.db:encryptable
 ehthumbs.db
 ehthumbs_vista.db
+*.stackdump
 [Dd]esktop.ini
 .DS_Store
+.AppleDouble
+.LSOverride
 ._*
+
+# --- IDEs & Editors ---
+.idea/
+.vscode/
+*.code-workspace
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+*~
+
+# --- Game Executables, Dumps & Large Temp Files ---
+*.exe
+*.dmp
+*.log
+*.tmp
+*.bak
+*.raw_backup
+*.extracted/
+temp/
+scratch/
+.system_generated/
+.workspace/
+artifacts/
+
+# --- Live Assets & Mods (Preserve folder structure) ---
+live_assets/*/*
+!live_assets/*/.gitkeep
+content/*/*
+!content/*/.gitkeep
+!content/*/README.txt
 copilot

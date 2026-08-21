@@ -34,9 +34,8 @@ def application_stylesheet(palette: Palette = PALETTE) -> str:
         font-size: 13px;
         color: {palette.ink};
     }}
-    QMainWindow, QWidget#AppCanvas, QDialog {{
+    QMainWindow, QWidget#AppCanvas {{
         background: {palette.canvas};
-        color: {palette.ink};
     }}
     QWidget#Sidebar {{
         background: {palette.sidebar};

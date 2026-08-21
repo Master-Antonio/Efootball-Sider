@@ -474,6 +474,45 @@ freecam_speed = 2.5
                 with open(decoded_path, "rb") as stream:
                     self.assertEqual(stream.read(), expected)
 
+    def test_db_injection_config_parsing_and_case_preservation(self):
+        """Verify reading db_injection settings and preserving casing for team/player rules."""
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from pathlib import Path
+
+        from ui.services.config import ConfigurationService
+        from ui.services.paths import WorkspacePaths
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            sider_ini = tmp_root / "sider.ini"
+            sider_ini.write_text(
+                """[db_injection]
+enabled = 1
+xor_mask = 0x6B
+
+[teams]
+; Comment line
+London FC = Arsenal
+MD White = Real Madrid
+
+[players]
+Silva = David Silva
+""",
+                encoding="utf-8",
+            )
+            paths = WorkspacePaths(tmp_root, tmp_root)
+            config_svc = ConfigurationService(paths)
+            db_cfg = config_svc.read_db_injection()
+
+            self.assertTrue(db_cfg.enabled)
+            self.assertEqual(db_cfg.xor_mask, 0x6B)
+            self.assertIn("London FC", db_cfg.teams)
+            self.assertEqual(db_cfg.teams["London FC"], "Arsenal")
+            self.assertIn("MD White", db_cfg.teams)
+            self.assertEqual(db_cfg.teams["MD White"], "Real Madrid")
+            self.assertIn("Silva", db_cfg.players)
+            self.assertEqual(db_cfg.players["Silva"], "David Silva")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -43,11 +43,6 @@ class ModsPage(QWidget):
         self.toggle_button.setIcon(qta.icon("fa6s.power-off", color="#17201C"))
         self.toggle_button.setEnabled(False)
         self.toggle_button.clicked.connect(self.toggle_selected)
-        self.build_zen_button = QPushButton("Build Zen Triplet")
-        self.build_zen_button.setIcon(qta.icon("fa6s.cubes", color="#17201C"))
-        self.build_zen_button.setEnabled(False)
-        self.build_zen_button.setToolTip("Compila il pacchetto in un Triplet .pak + .utoc + .ucas per ~mods/")
-        self.build_zen_button.clicked.connect(self.build_zen_selected)
         self.delete_button = QPushButton("Delete")
         self.delete_button.setProperty("role", "danger")
         self.delete_button.setIcon(qta.icon("fa6s.trash", color="#B13B36"))
@@ -61,7 +56,6 @@ class ModsPage(QWidget):
         refresh.clicked.connect(self.refresh)
         toolbar.addWidget(install)
         toolbar.addWidget(self.toggle_button)
-        toolbar.addWidget(self.build_zen_button)
         toolbar.addWidget(self.delete_button)
         toolbar.addWidget(open_folder)
         toolbar.addStretch(1)
@@ -200,61 +194,18 @@ class ModsPage(QWidget):
             self,
             "Delete mod package",
             f"Delete '{record['name']}' from content?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Delete | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
         )
-        if answer != QMessageBox.StandardButton.Yes:
+        if answer != QMessageBox.StandardButton.Delete:
             return
         self.context.config.delete_mod(record["folder"])
         self.banner.set_message(f"Deleted {record['name']}.", "success")
         self.refresh()
 
-    def build_zen_selected(self) -> None:
-        record = self._selected_record()
-        if not record:
-            return
-        folder_name = record["folder"]
-        mod_name = record["name"]
-        source_dir = self.context.paths.content / folder_name
-        output_dir = self.context.paths.game_mods_paks
-
-        if not self.context.zen_builder.is_available():
-            QMessageBox.critical(
-                self,
-                "retoc non disponibile",
-                f"retoc.exe non trovato in: {self.context.zen_builder.retoc_exe}",
-            )
-            return
-
-        self.build_zen_button.setEnabled(False)
-        self.banner.set_message(f"Compilazione Zen Triplet per '{mod_name}' in corso...", "info")
-        self.status_message.emit(f"Compilazione Triplet '{mod_name}'...")
-
-        from ..workers import TaskWorker
-
-        def _do_build():
-            return self.context.zen_builder.build_triplet(source_dir, folder_name, output_dir)
-
-        worker = TaskWorker(_do_build)
-
-        def _on_result(res):
-            if res.success:
-                msg = f"🎉 Zen Triplet compilato con successo per '{mod_name}' (.pak, .utoc, .ucas) in ~mods/"
-                self.banner.set_message(msg, "success")
-                self.status_message.emit(f"Triplet generato: {res.mod_name}_P")
-                QMessageBox.information(self, "Zen Triplet Generato", msg)
-            else:
-                self.banner.set_message(f"Errore nella generazione del Triplet: {res.mod_name}", "error")
-                QMessageBox.critical(self, "Errore Compilazione Triplet", res.log_output)
-
-        worker.signals.result.connect(_on_result)
-        worker.signals.finished.connect(lambda: self.build_zen_button.setEnabled(True))
-        self.context.start_worker(worker)
-
     def _selection_changed(self, _selected=None, _deselected=None) -> None:
         record = self._selected_record()
         self.toggle_button.setEnabled(record is not None)
-        self.build_zen_button.setEnabled(record is not None)
         self.delete_button.setEnabled(record is not None)
         if record:
             self.toggle_button.setText("Disable" if record["enabled"] else "Enable")
@@ -271,4 +222,3 @@ class ModsPage(QWidget):
             self.context.game.open_path(path)
         except (FileNotFoundError, OSError) as exc:
             self.banner.set_message(str(exc), "error")
-

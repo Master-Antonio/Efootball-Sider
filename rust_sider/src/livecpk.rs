@@ -30,12 +30,14 @@ static OVERRIDE_LOG_COUNT: AtomicUsize = AtomicUsize::new(0);
 static BASENAME_LOG_COUNT: AtomicUsize = AtomicUsize::new(0);
 const MAX_LOGGED_OVERRIDES: usize = 20;
 
+/// Popola la tabella di lookup O(1) usando solo le root esplicitamente registrate in ordine di priorita.
 pub fn init_livecpk_vfs(mod_roots: Vec<PathBuf>) {
     let mut rel_map = HashMap::new();
     let mut basename_map = HashMap::new();
     let mut active_roots_list = Vec::new();
     let mut indexed_count = 0;
 
+    // Indicizza le root delle mod registrate rispettando l'ordine di priorita (first-wins)
     for root in &mod_roots {
         if !root.exists() {
             continue;
@@ -76,6 +78,7 @@ pub fn init_livecpk_vfs(mod_roots: Vec<PathBuf>) {
     ));
 }
 
+/// Restituisce la diagnostica testuale del VFS per il log e la GUI
 pub fn get_vfs_diagnostics() -> String {
     let mut out = String::new();
     let roots_count = if let Ok(guard) = ACTIVE_ROOTS.read() {
@@ -104,43 +107,56 @@ pub fn get_vfs_diagnostics() -> String {
     out
 }
 
-fn resolve_custom_path(requested_path: &str) -> Option<PathBuf> {
-    let norm = requested_path.replace('/', "\\").to_lowercase();
-    if let Ok(guard) = VFS_MAP.read() {
-        if let Some(ref vfs) = *guard {
-            if let Some(custom_path) = vfs.rel_map.get(&norm) {
+impl VfsTable {
+    /// Resolves the virtual file path with O(1) lookup
+    pub fn resolve(&self, requested_path: &str) -> Option<PathBuf> {
+        let norm = requested_path.replace('/', "\\").to_lowercase();
+        // 1. Direct O(1) lookup
+        if let Some(custom_path) = self.rel_map.get(&norm) {
+            return Some(custom_path.clone());
+        }
+
+        // 2. O(1) suffix lookup for full/absolute paths
+        let mut search_slice = norm.as_str();
+        while let Some(idx) = search_slice.find('\\') {
+            search_slice = &search_slice[idx + 1..];
+            if let Some(custom_path) = self.rel_map.get(search_slice) {
                 return Some(custom_path.clone());
             }
+        }
 
-            let mut search_slice = norm.as_str();
-            while let Some(idx) = search_slice.find('\\') {
-                search_slice = &search_slice[idx + 1..];
-                if let Some(custom_path) = vfs.rel_map.get(search_slice) {
+        // 3. Fallback level 3: deterministic O(1) basename match
+        if let Some(file_name) = norm.rsplit('\\').next() {
+            if !file_name.is_empty() {
+                if let Some(custom_path) = self.basename_map.get(file_name) {
+                    let count = BASENAME_LOG_COUNT.fetch_add(1, Ordering::Relaxed);
+                    if count < MAX_LOGGED_OVERRIDES {
+                        crate::log_msg(&format!(
+                            "[LIVECPK BASENAME #{}] Match di fallback per basename: '{}' -> '{}'",
+                            count + 1,
+                            requested_path,
+                            custom_path.display()
+                        ));
+                    }
                     return Some(custom_path.clone());
                 }
             }
+        }
+        None
+    }
+}
 
-            if let Some(file_name) = norm.rsplit('\\').next() {
-                if !file_name.is_empty() {
-                    if let Some(custom_path) = vfs.basename_map.get(file_name) {
-                        let count = BASENAME_LOG_COUNT.fetch_add(1, Ordering::Relaxed);
-                        if count < MAX_LOGGED_OVERRIDES {
-                            crate::log_msg(&format!(
-                                "[LIVECPK BASENAME #{}] Match di fallback per basename: '{}' -> '{}'",
-                                count + 1,
-                                requested_path,
-                                custom_path.display()
-                            ));
-                        }
-                        return Some(custom_path.clone());
-                    }
-                }
-            }
+/// Risolve il percorso con lookup O(1) nel Virtual File System
+fn resolve_custom_path(requested_path: &str) -> Option<PathBuf> {
+    if let Ok(guard) = VFS_MAP.read() {
+        if let Some(ref vfs) = *guard {
+            return vfs.resolve(requested_path);
         }
     }
     None
 }
 
+/// Handler Detour per CreateFileW
 unsafe extern "system" fn detour_create_file_w(
     lp_file_name: *const u16,
     dw_desired_access: u32,
@@ -165,6 +181,7 @@ unsafe extern "system" fn detour_create_file_w(
         return INVALID_HANDLE_VALUE;
     }
 
+    // Converti puntatore UTF-16 in String Rust
     let mut len = 0;
     while *lp_file_name.add(len) != 0 {
         len += 1;
@@ -172,11 +189,13 @@ unsafe extern "system" fn detour_create_file_w(
     let slice = std::slice::from_raw_parts(lp_file_name, len);
     let original_path = String::from_utf16_lossy(slice);
 
+    // Verifica se esiste un override nel VFS
     if let Some(custom_path) = resolve_custom_path(&original_path) {
         let custom_str = custom_path.to_string_lossy().to_string();
         let mut custom_wide: Vec<u16> = custom_str.encode_utf16().collect();
-        custom_wide.push(0);
+        custom_wide.push(0); // Null-terminator
 
+        // Limita il logging ai primi 20 override per evitare spam su disco
         let count = OVERRIDE_LOG_COUNT.fetch_add(1, Ordering::Relaxed);
         if count < MAX_LOGGED_OVERRIDES {
             crate::log_msg(&format!(
@@ -189,6 +208,7 @@ unsafe extern "system" fn detour_create_file_w(
             crate::log_msg("[LIVECPK] Limite di 20 log di override raggiunto; ulteriori log silenziati.");
         }
 
+        // Reindirizza la chiamata di sistema al file personalizzato della mod
         if let Some(hook) = HOOK_CREATE_FILE_W.get() {
             return hook.call(
                 custom_wide.as_ptr(),
@@ -202,6 +222,7 @@ unsafe extern "system" fn detour_create_file_w(
         }
     }
 
+    // Forward originale se non è presente alcun override
     if let Some(hook) = HOOK_CREATE_FILE_W.get() {
         hook.call(
             lp_file_name,
@@ -217,6 +238,7 @@ unsafe extern "system" fn detour_create_file_w(
     }
 }
 
+/// Installa l'hook detour su kernel32.dll!CreateFileW usando retour
 pub fn install_create_file_hook() -> bool {
     unsafe {
         let h_kernel32 = GetModuleHandleA(b"kernel32.dll\0".as_ptr());
@@ -250,6 +272,7 @@ pub fn install_create_file_hook() -> bool {
     }
 }
 
+/// Inizializza l'intero sottosistema LiveCPK (VFS + Hook CreateFileW)
 pub fn init_livecpk(roots: Vec<PathBuf>) {
     init_livecpk_vfs(roots);
     install_create_file_hook();
@@ -262,22 +285,16 @@ mod tests {
     #[test]
     fn test_lookup_live_asset_normalization() {
         let mut rel_map = HashMap::new();
-        let mut basename_map = HashMap::new();
+        let basename_map = HashMap::new();
         rel_map.insert(
             "character\\face\\diffuse.uasset".to_string(),
             PathBuf::from("content\\RealFaces\\character\\face\\diffuse.uasset"),
         );
-        basename_map.insert(
-            "diffuse.uasset".to_string(),
-            PathBuf::from("content\\RealFaces\\character\\face\\diffuse.uasset"),
-        );
-        if let Ok(mut guard) = VFS_MAP.write() {
-            *guard = Some(VfsTable {
-                rel_map,
-                basename_map,
-            });
-        }
-        let res = resolve_custom_path("C:\\eFootball\\Content\\Character/Face\\Diffuse.uasset");
+        let vfs = VfsTable {
+            rel_map,
+            basename_map,
+        };
+        let res = vfs.resolve("C:\\eFootball\\Content\\Character/Face\\Diffuse.uasset");
         assert!(res.is_some());
         assert_eq!(
             res.unwrap(),
@@ -297,13 +314,11 @@ mod tests {
             "team.bin".to_string(),
             PathBuf::from("content\\RealDatabase\\team.bin"),
         );
-        if let Ok(mut guard) = VFS_MAP.write() {
-            *guard = Some(VfsTable {
-                rel_map,
-                basename_map,
-            });
-        }
-        let res = resolve_custom_path("A:\\Games\\eFootball\\Paks\\SubDir\\Team.bin");
+        let vfs = VfsTable {
+            rel_map,
+            basename_map,
+        };
+        let res = vfs.resolve("A:\\Games\\eFootball\\Paks\\SubDir\\Team.bin");
         assert!(res.is_some());
         assert_eq!(
             res.unwrap(),

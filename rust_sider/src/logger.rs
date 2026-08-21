@@ -5,7 +5,7 @@ use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::OnceLock;
 use std::thread;
 
-const BUFFER_CAPACITY: usize = 64 * 1024;
+const BUFFER_CAPACITY: usize = 64 * 1024; // Buffer da 64 KB per ottimizzare l'I/O su disco
 static LOG_SENDER: OnceLock<Sender<String>> = OnceLock::new();
 
 fn init_logger() -> Sender<String> {
@@ -36,6 +36,7 @@ fn logger_worker(rx: Receiver<String>) {
         let _ = writeln!(writer, "[{}][SIDER] {}", timestamp, msg);
         let _ = writer.flush();
 
+        // Drena tutti i messaggi successivi già presenti nel canale senza bloccarsi
         loop {
             match rx.try_recv() {
                 Ok(next_msg) => {
@@ -44,6 +45,7 @@ fn logger_worker(rx: Receiver<String>) {
                     let _ = writer.flush();
                 }
                 Err(TryRecvError::Empty) => {
+                    // La coda è vuota: eseguiamo il flush del buffer su disco
                     let _ = writer.flush();
                     break;
                 }
@@ -57,6 +59,7 @@ fn logger_worker(rx: Receiver<String>) {
     let _ = writer.flush();
 }
 
+/// Invia un messaggio di log in modo asincrono e non bloccante tramite canale MPSC.
 pub fn log_async(msg: &str) {
     let tx = LOG_SENDER.get_or_init(init_logger);
     let _ = tx.send(msg.to_string());

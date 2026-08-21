@@ -102,7 +102,7 @@ fn decrypt_current_wesys_payload(
     Some(out)
 }
 
-const MAX_WESYS_SIZE: usize = 256 * 1024 * 1024;
+const MAX_WESYS_SIZE: usize = 256 * 1024 * 1024; // 256 MiB
 
 pub fn unpack_wesys(data: &[u8]) -> Option<Vec<u8>> {
     if !is_wesys_container(data) {

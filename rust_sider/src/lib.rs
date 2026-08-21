@@ -1,4 +1,6 @@
 #![allow(dead_code)]
+#![allow(clippy::missing_safety_doc)]
+#![allow(clippy::manual_c_str_literals)]
 
 mod camera;
 pub mod crypto;
@@ -8,7 +10,6 @@ mod overlay;
 mod scanner;
 mod server;
 mod teams;
-pub mod ue4;
 
 use std::ffi::c_void;
 use std::path::PathBuf;
@@ -21,6 +22,7 @@ use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
 
 const SIDER_VERSION: &str = "v1.1";
 
+/// Main Sider log function: forwards to the async logger module
 pub fn log_msg(msg: &str) {
     logger::log_async(msg);
 }
@@ -133,6 +135,9 @@ fn ensure_sider_initialized() {
     });
 }
 
+/// Returns the directory that contains the Sider dxgi.dll itself.
+/// This is independent from the process working directory, which can change
+/// depending on how the game is launched (Steam, batch file, direct exe).
 fn get_module_dir() -> Option<PathBuf> {
     let h = SIDER_MODULE.get().copied()?;
     let mut buffer = [0u16; 1024];
@@ -150,6 +155,10 @@ fn get_module_dir() -> Option<PathBuf> {
     PathBuf::from(s).parent().map(|d| d.to_path_buf())
 }
 
+/// Locates sider.ini. Priority order:
+/// 1. Next to the Sider DLL (most reliable, independent from CWD)
+/// 2. Parent of the DLL directory
+/// 3. Legacy CWD-relative candidates
 fn find_sider_ini() -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
 
@@ -198,13 +207,15 @@ fn worker_loop() {
         log_msg("[INI] WARNING: sider.ini not found anywhere. Camera will use default settings.");
     }
 
+    // Camera subsystem ALWAYS starts, even when sider.ini is missing
     camera::start_camera_hook(sider_ini_path.clone());
     log_msg("Camera & FOV real-time controller engaged.");
 
-    livecpk::init_livecpk(root_dirs.clone());
+    // DB in-memory live injection engine
+    start_db_injection(sider_ini_path.clone());
+    log_msg("In-Memory DB string patcher engaged.");
 
-    teams::start_database_team_syncer(root_dirs.clone());
-    log_msg("Real-Time Safe Database Team Syncer engaged.");
+    livecpk::init_livecpk(root_dirs.clone());
 
     for r in &root_dirs {
         server::scan_server_directories(r);
@@ -214,14 +225,86 @@ fn worker_loop() {
     overlay::start_input_listener();
     log_msg("In-Game OSD HUD & Hotkey Listener engaged [Space = Menu, F1 = Freecam, Numpad = Zoom/Height].");
 
-    ue4::find_guobject_array();
-    log_msg("UE4 Object Reflection in RAM resolver engaged.");
-
     log_msg("Sider Core background services operational.");
 
     loop {
         thread::sleep(Duration::from_secs(60));
     }
+}
+
+fn start_db_injection(ini_path_opt: Option<PathBuf>) {
+    thread::spawn(move || {
+        log_msg("=== In-Memory DB Live Injection Engine Started ===");
+        let mut last_ini_mod_time = std::time::SystemTime::UNIX_EPOCH;
+        let mut db_config = match &ini_path_opt {
+            Some(p) => teams::load_db_injection_config_from_ini(p),
+            None => teams::DbInjectionConfig::default(),
+        };
+
+        log_msg(&format!(
+            "[DB INJECTION] Loaded {} rules (enabled={}, mask=0x{:02X})",
+            db_config.rules.len(),
+            db_config.enabled,
+            db_config.xor_mask
+        ));
+
+        // Initial delay to allow game process heap and database loading to stabilize
+        thread::sleep(Duration::from_secs(4));
+
+        let start_time = std::time::Instant::now();
+        let mut sweep_count = 0usize;
+
+        loop {
+            sweep_count += 1;
+
+            // Check if sider.ini was modified for hot-reload
+            if let Some(ref p) = ini_path_opt {
+                if let Ok(meta) = std::fs::metadata(p) {
+                    if let Ok(mod_time) = meta.modified() {
+                        if mod_time > last_ini_mod_time {
+                            last_ini_mod_time = mod_time;
+                            let new_cfg = teams::load_db_injection_config_from_ini(p);
+                            log_msg(&format!(
+                                "[DB INJECTION] sider.ini reload: {} active rules (enabled={}, mask=0x{:02X})",
+                                new_cfg.rules.len(),
+                                new_cfg.enabled,
+                                new_cfg.xor_mask
+                            ));
+                            db_config = new_cfg;
+                        }
+                    }
+                }
+            }
+
+            if db_config.enabled && !db_config.rules.is_empty() {
+                let sweep_start = std::time::Instant::now();
+                let patched = teams::scan_and_patch_process_memory(&db_config);
+                let elapsed = sweep_start.elapsed();
+
+                if patched > 0 {
+                    log_msg(&format!(
+                        "[DB INJECTION] Sweep #{} patched {} occurrences in RAM ({:?})",
+                        sweep_count, patched, elapsed
+                    ));
+                }
+            }
+
+            // Exponential backoff:
+            // 0-30s: every 5s
+            // 30-120s: every 15s
+            // >120s: every 60s
+            let uptime = start_time.elapsed().as_secs();
+            let sleep_duration = if uptime < 30 {
+                Duration::from_secs(5)
+            } else if uptime < 120 {
+                Duration::from_secs(15)
+            } else {
+                Duration::from_secs(60)
+            };
+
+            thread::sleep(sleep_duration);
+        }
+    });
 }
 
 unsafe fn is_game_process() -> bool {
@@ -241,6 +324,7 @@ unsafe fn is_game_process() -> bool {
 #[no_mangle]
 pub unsafe extern "system" fn DllMain(hinst: HMODULE, reason: u32, _reserved: *mut c_void) -> BOOL {
     if reason == 1 {
+        // Remember our own module handle so we can locate sider.ini next to the DLL
         let _ = SIDER_MODULE.set(hinst);
         if is_game_process() {
             log_msg("SIDER DLL_PROCESS_ATTACH triggered in game process.");
